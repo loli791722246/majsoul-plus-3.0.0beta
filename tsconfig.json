@@ -9,7 +9,9 @@
     "outDir": "./dist",
     "sourceMap": true,
     "pretty": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "esModuleInterop": false
     // "strict": true
   },
   "include": ["src/*.ts", "src/**/*.ts"],

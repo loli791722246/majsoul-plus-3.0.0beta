@@ -1,21 +1,16 @@
-import { ipcRenderer, remote } from 'electron'
+import { ipcRenderer, webContents as electronWebContents } from 'electron'
+import { pathToFileURL } from 'url'
 import i18n from '../../i18n'
 import Global from '../../manager/global'
 import { MajsoulPlus } from '../../majsoul_plus'
 
 const userConfigs: MajsoulPlus.UserConfig = require(Global.UserConfigPath)
 
-const remoteDomains = [
-  { id: 0, name: 'zh', domain: 'https://game.maj-soul.com/1' },
-  { id: 1, name: 'jp', domain: 'https://game.mahjongsoul.com/' },
-  { id: 2, name: 'en', domain: 'https://mahjongsoul.game.yo-star.com/' }
-]
-
 const mainWindow: Electron.WebviewTag = document.querySelector('#mainWindow')
 const mainWindowBox: HTMLDivElement = document.querySelector('#mainWindowBox')
 const scalePercent = userConfigs.window.renderingMultiple
 
-let webContents: Electron.webContents
+let webContents: Electron.WebContents
 
 let screenshotCounter = 0
 let screenshotTimer: NodeJS.Timeout
@@ -62,7 +57,7 @@ ipcRenderer.on(
 )
 
 ipcRenderer.on('screenshot-saved', (event, filePath: string) => {
-  showScreenshotLabel('file://' + filePath)
+  showScreenshotLabel(pathToFileURL(filePath).toString())
 })
 
 ipcRenderer.on('open-devtools', () => {
@@ -77,36 +72,10 @@ ipcRenderer.on('set-audio-muted', (event, bool: boolean) => {
   }
 })
 
-let serverInfo: {
-  url: string
-  port: number
-  http: boolean
-}
-
-function isVanillaGameUrl(url: string) {
-  return (
-    url.startsWith(remoteDomains[0].domain) ||
-    url.startsWith(remoteDomains[1].domain) ||
-    url.startsWith(remoteDomains[2].domain)
+function isGameUrl(url: string) {
+  return /^https?:\/\/([^/]*\.)?(maj-soul\.com|mahjongsoul\.com|majsoul\.com|yo-star\.com|catmjstudio\.com)/i.test(
+    url
   )
-}
-
-function isLocalHost(url: string) {
-  return url.match(/https?:\/\/localhost:/)
-}
-
-function getLocalUrlWithParams(url: string) {
-  if (url.includes('?')) {
-    return `${serverInfo.url}${url.substring(url.indexOf('?'))}`
-  }
-  return serverInfo.url
-}
-
-function redirectGameWindow(url: string, gameWindow: Electron.WebviewTag) {
-  const localUrl = getLocalUrlWithParams(url)
-  console.log('[Majsoul Plus] Redirect Target:' + localUrl)
-
-  gameWindow.loadURL(localUrl)
 }
 
 function scaleWindow(percent = scalePercent) {
@@ -119,40 +88,38 @@ function scaleWindow(percent = scalePercent) {
 
 mainWindow.addEventListener('dom-ready', () => {
   if (!webContents) {
-    webContents = remote.webContents.fromId(mainWindow.getWebContentsId())
+    webContents = electronWebContents.fromId(mainWindow.getWebContentsId())
     webContents.zoomFactor = 1
-
-    webContents.on('will-navigate', (event, url) => {
-      if (isVanillaGameUrl(url)) {
-        event.preventDefault()
-        redirectGameWindow(url, mainWindow)
-      }
-    })
 
     if (process.env.NODE_ENV === 'development') {
       mainWindow.openDevTools()
     }
   }
 
-  if (isLocalHost(mainWindow.src)) {
+  if (isGameUrl(mainWindow.src)) {
     scaleWindow(scalePercent)
-    mainWindow.insertCSS('body{overflow:hidden;}')
+    try {
+      mainWindow.insertCSS('body{overflow:hidden;}')
+    } catch (error) {
+      console.error(error)
+    }
   } else {
     scaleWindow(100)
   }
+
+  try {
+    mainWindow.setUserAgent(navigator.userAgent)
+  } catch {}
 })
 
 ipcRenderer.on(
   'load-url',
   (event, url: string, port: number, http: boolean, partition?: string) => {
-    serverInfo = { url, port, http }
-    console.log('[Majsoul Plus] LoadURL', serverInfo)
+    console.log('[Majsoul Plus] LoadURL', { url, port, http })
 
     if (partition) {
       mainWindow.partition = partition
     }
-
-    mainWindow.useragent = navigator.userAgent
     mainWindow.src = url
     mainWindowBox.style.width = '100vw'
     mainWindowBox.style.height = '100vh'

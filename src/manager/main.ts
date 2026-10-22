@@ -15,7 +15,7 @@ import About from './pages/About'
 import darkModeTheme from './extra/darkMode/main'
 import springFestivalTheme from './extra/springFestivalTheme/main'
 import prayForKyoani from './extra/prayForKyoani/main'
-import { ipcRenderer, remote, shell } from 'electron'
+import { ipcRenderer, shell } from 'electron'
 
 class ResourceManager {
   private static userConfig = Setting.userConfig
@@ -127,6 +127,13 @@ class ResourceManager {
     const launch = document.querySelector('#launch')
     launch.addEventListener('click', ResourceManager.gameStart)
 
+    // 清除缓存（替换立绘 / 语音后需要）
+    const clearCache = document.querySelector('#clearCache')
+    clearCache.addEventListener('click', () => {
+      ipcRenderer.sendSync('clear-cache')
+      alert(i18n.text.manager.clearCacheSucceeded())
+    })
+
     // 关闭 Manager
     const closeBtn = document.querySelector('#closeBtn')
     if (os.platform() === 'darwin') {
@@ -164,8 +171,8 @@ class ResourceManager {
   // 从 MSP* 导入资源包 / 扩展 / 工具
   private static importMSP(type: string) {
     return () => {
-      remote.dialog
-        .showOpenDialog({
+      ipcRenderer
+        .invoke('show-open-dialog', {
           title: i18n.text.manager.installFrom(),
           filters: [
             {
@@ -190,6 +197,7 @@ class ResourceManager {
           properties: ['openFile', 'multiSelections']
         })
         .then(files => {
+          if (!files || files.canceled) return
           files.filePaths.forEach(file => {
             ipcRenderer.sendSync(`import-${type.toLowerCase()}`, file)
           })

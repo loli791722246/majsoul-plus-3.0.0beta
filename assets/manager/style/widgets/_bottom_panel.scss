@@ -48,6 +48,27 @@
     }
   }
 
+  #clearCache {
+    position: absolute;
+    right: 208px;
+    bottom: 18px;
+    height: 28px;
+    line-height: 26px;
+    padding: 0 14px;
+    font-size: 14px;
+    color: var(--light-text);
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: color var(--animation-time) var(--ease-in-out),
+      border-color var(--animation-time) var(--ease-in-out);
+    &:hover {
+      color: var(--main-color);
+      border-color: var(--main-color);
+    }
+  }
+
   #launch {
     position: absolute;
     right: 0;

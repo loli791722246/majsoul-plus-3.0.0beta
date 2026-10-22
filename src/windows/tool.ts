@@ -1,5 +1,6 @@
 import { BrowserWindow, ipcMain } from 'electron'
 import * as path from 'path'
+import { pathToFileURL } from 'url'
 import { Global } from '../global'
 import { MajsoulPlus } from '../majsoul_plus'
 import { ToolManager } from '../tool/tool'
@@ -17,7 +18,7 @@ class ToolWindow {
     toolWindowConfig.webPreferences = {
       ...Global.ToolWindowConfig.webPreferences,
       ...localConfig.windowOptions.webPreferences,
-      sandbox: true,
+      sandbox: false,
       preload: path.join(__dirname, 'sandbox-preload.js')
     }
 
@@ -30,8 +31,9 @@ class ToolWindow {
     }
 
     this.window.loadURL(
-      'file://' +
+      pathToFileURL(
         path.join(Global.ToolFolderPath, id, localConfig.index || 'index.html')
+      ).toString()
     )
   }
 

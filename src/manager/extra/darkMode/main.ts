@@ -1,4 +1,3 @@
-import { remote } from 'electron'
 import { MajsoulPlus } from '../../../majsoul_plus'
 
 function changeTheme(mode: string) {
@@ -9,16 +8,15 @@ function changeTheme(mode: string) {
 }
 
 export default function darkMode(userConfig: MajsoulPlus.UserConfig) {
-  const { nativeTheme } = remote
+  const query = window.matchMedia('(prefers-color-scheme: dark)')
 
   const setOSTheme = () => {
-    console.log(nativeTheme.shouldUseDarkColors)
-    changeTheme(nativeTheme.shouldUseDarkColors ? 'dark' : 'light')
+    changeTheme(query.matches ? 'dark' : 'light')
   }
 
-  nativeTheme.addListener('updated', () => {
-    setOSTheme()
-  })
+  if (query.addEventListener) {
+    query.addEventListener('change', setOSTheme)
+  }
 
   setOSTheme()
   // changeTheme(userConfig.window.OSTheme)

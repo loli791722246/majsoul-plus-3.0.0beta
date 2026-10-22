@@ -1,8 +1,6 @@
-import Ajv from 'ajv'
+import * as Ajv from 'ajv'
 import { ipcMain } from 'electron'
 import * as fs from 'fs'
-import * as Koa from 'koa'
-import * as Router from 'koa-router'
 import * as path from 'path'
 import * as semver from 'semver'
 import { appDataDir, Logger } from './global'
@@ -260,8 +258,6 @@ export default abstract class BaseManager {
     this.enabled = validatedEnabled
   }
 
-  register(server: Koa, router: Router) {}
-
   getDetail(id: string) {
     return { ...this.loadedDetails[id].metadata }
   }
@@ -315,9 +311,13 @@ export default abstract class BaseManager {
   }
 
   save() {
-    fs.writeFileSync(this.configPath, JSON.stringify(this.enabled, null, 2), {
-      encoding: 'utf-8'
-    })
+    try {
+      fs.writeFileSync(this.configPath, JSON.stringify(this.enabled, null, 2), {
+        encoding: 'utf-8'
+      })
+    } catch (error) {
+      Logger.warning(`保存 ${this.name} 启用状态失败: ${error}`)
+    }
   }
 
   changeEnable(event, id: string, enabled: boolean) {

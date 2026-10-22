@@ -1,64 +1,49 @@
-const { ncp } = require('ncp')
 const fs = require('fs')
 const path = require('path')
 
 const dest = path.resolve('./dist/')
 
-// 移除包含 exports 的第二行
+// 移除包含 exports 的第二行（sandbox-preload 需要以脚本形式运行）
 function simpleBrowserify(dir) {
-  fs.readFile(path.resolve(dest, dir), { encoding: 'utf-8' }, function(
-    err,
-    data
-  ) {
-    if (err) {
-      console.error(err)
-      return
-    }
+  const file = path.resolve(dest, dir)
+  try {
+    const data = fs.readFileSync(file, { encoding: 'utf-8' })
     const lines = data.split('\n')
     lines.splice(1, 1)
-    fs.writeFile(
-      path.resolve(dest, dir),
-      lines.join('\n'),
-      { encoding: 'utf-8' },
-      () => {}
-    )
-  })
+    fs.writeFileSync(file, lines.join('\n'), { encoding: 'utf-8' })
+  } catch (error) {
+    console.error(error)
+  }
 }
 
-// Copy files
-function copy(from, to = from, callback = () => {}) {
-  ncp(path.resolve('./', from), path.resolve(dest, to), err => {
-    if (err) console.error(err)
-    else callback()
-  })
+function copy(from, to = from) {
+  const srcRoot = path.resolve('./', from)
+  const dstRoot = path.resolve(dest, to)
+  fs.mkdirSync(dstRoot, { recursive: true })
+  for (const entry of fs.readdirSync(srcRoot)) {
+    fs.cpSync(path.join(srcRoot, entry), path.join(dstRoot, entry), {
+      recursive: true
+    })
+  }
 }
 
-function copyA(from, parent = 'bin', callback = () => {}) {
-  copy(from, parent + '/' + from, callback)
-}
-
-function copyDesktopCreatorFonts() {
-  // 桌布生成工具的字体
-  fs.copyFile(
-    './assets/manager/fonts/SourceHanSansCN-Light.otf',
-    './dist/bin/tool/desktopCreator/SourceHanSansCN-Light.otf',
-    err => {
-      if (err) console.error(err)
-    }
-  )
-  fs.copyFile(
-    './assets/manager/fonts/SourceHanSansCN-Normal.otf',
-    './dist/bin/tool/desktopCreator/SourceHanSansCN-Normal.otf',
-    err => {
-      if (err) console.error(err)
-    }
-  )
-}
-
-copy('assets', '')
+// 复制静态资源
+copy('assets', '.')
 copy('i18n')
-copyA('resourcepack')
-copyA('extension')
-copyA('tool', 'bin', copyDesktopCreatorFonts)
+copy('resourcepack', 'bin/resourcepack')
+copy('extension', 'bin/extension')
+copy('tool', 'bin/tool')
+
+// 桌布生成工具的字体
+for (const font of ['SourceHanSansCN-Light.otf', 'SourceHanSansCN-Normal.otf']) {
+  const from = path.resolve('./assets/manager/fonts', font)
+  const to = path.resolve(dest, 'bin/tool/desktopCreator', font)
+  try {
+    fs.mkdirSync(path.dirname(to), { recursive: true })
+    fs.copyFileSync(from, to)
+  } catch (error) {
+    console.error(error)
+  }
+}
 
 simpleBrowserify('windows/sandbox-preload.js')

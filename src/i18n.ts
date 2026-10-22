@@ -1,7 +1,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import * as CSV from 'comma-separated-values'
-import { app, remote } from 'electron'
+import { app } from 'electron'
 
 /**
  * 本地化，单条语句翻译对象
@@ -300,5 +300,17 @@ class I18n {
 }
 
 export default new I18n({
-  actives: [(app || remote.app).getLocale()]
+  actives: [getLocale()]
 })
+
+function getLocale(): string {
+  try {
+    return app.getLocale()
+  } catch {
+    try {
+      return navigator.language
+    } catch {
+      return 'en-US'
+    }
+  }
+}

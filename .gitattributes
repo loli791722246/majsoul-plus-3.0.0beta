@@ -1,0 +1,28 @@
+* text=auto
+
+# Windows launchers must stay CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Unix scripts stay LF
+*.sh text eol=lf
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.ttf binary
+*.ttc binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.majset binary
+*.zip binary
+*.7z binary
+*.mp3 binary
+*.wav binary
+*.ogg binary

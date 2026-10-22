@@ -5,7 +5,7 @@ cache:
   - '%USERPROFILE%\AppData\Local\Yarn\cache'
 
 install:
-  - ps: Install-Product node 18
+  - ps: Install-Product node 12
   - yarn
   - node --version
 

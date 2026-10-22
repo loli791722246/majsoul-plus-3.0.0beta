@@ -5,7 +5,6 @@ import * as path from 'path'
 import * as semver from 'semver'
 import { ConsoleLogger } from './logger'
 import { MajsoulPlus } from './majsoul_plus'
-import { copyFolderSync, getFoldersSync, removeDirSync } from './utils'
 
 export const Logger = new ConsoleLogger('Majsoul_Plus')
 
@@ -57,7 +56,8 @@ export const RemoteDomains = [
 
 export const Global: MajsoulPlus.Global = {
   version: app.getVersion(),
-  ServerPort: 8887,
+  ServerPort: 23410,
+  ProxyPort: 23410,
   XOR_KEY: 73,
   EXTEND_RES_KEYWORD: 'extendRes',
   ResourcePackConfigPath: '',
@@ -82,9 +82,9 @@ export const Global: MajsoulPlus.Global = {
     enableLargerThanScreen: true,
     webPreferences: {
       nodeIntegration: true,
-      webviewTag: true,
-	  enableRemoteModule: true,
       contextIsolation: false,
+      sandbox: false,
+      webviewTag: true
     }
   },
   ManagerWindowConfig: {
@@ -96,8 +96,8 @@ export const Global: MajsoulPlus.Global = {
     webPreferences: {
       webSecurity: false,
       nodeIntegration: true,
-	  enableRemoteModule: true,
       contextIsolation: false,
+      sandbox: false
     },
     title: '雀魂Plus',
     icon: appIcon,
@@ -114,8 +114,8 @@ export const Global: MajsoulPlus.Global = {
     webPreferences: {
       webSecurity: false,
       allowRunningInsecureContent: true,
-	  enableRemoteModule: true,
       contextIsolation: false,
+      sandbox: false
     },
     autoHideMenuBar: true,
     icon: appIcon,
@@ -129,57 +129,66 @@ export const Global: MajsoulPlus.Global = {
 }
 
 export function InitGlobal() {
-  ;[
-    Global.ResourcePackConfigPath,
-    Global.ExtensionConfigPath,
-    Global.ToolConfigPath
-  ] = [
-    GlobalPath.ResourcePackDir,
-    GlobalPath.ExtensionDir,
-    GlobalPath.ToolsDir
-  ].map(dir => {
+  // 延迟加载，避免 global <-> utils 的循环依赖
+  const { copyFolderSync, getFoldersSync, removeDirSync } = require('./utils')
+  const dirs: Array<[string, string]> = [
+    ['resourcepack', 'ResourcePackConfigPath'],
+    ['extension', 'ExtensionConfigPath'],
+    ['tool', 'ToolConfigPath']
+  ]
+
+  for (const [dir, configKey] of dirs) {
     const from = path.join(__dirname, 'bin', dir)
     const to = path.join(appDataDir, dir)
-    if (!fs.existsSync(to) && app) {
-      copyFolderSync(from, appDataDir)
-    } else {
-      const folders = getFoldersSync(from)
-      folders.forEach(ext => {
-        if (
-          // 首先该拓展需要存在
-          fs.existsSync(path.join(to, ext, `${dir}.json`)) &&
-          (() => {
-            try {
-              const old = JSON.parse(
-                fs.readFileSync(path.join(to, ext, `${dir}.json`), {
-                  encoding: 'utf-8'
-                })
-              )
-              const latest = JSON.parse(
-                fs.readFileSync(path.join(from, ext, `${dir}.json`), {
-                  encoding: 'utf-8'
-                })
-              )
-              if (old.version === undefined) throw new Error('1.x')
-              else {
-                // 版本号合法性检查
-                if (!semver.valid(old.version)) {
-                  throw new Error('invalid version')
+    try {
+      fs.mkdirSync(to, { recursive: true })
+      if (!fs.existsSync(path.join(to, 'active.json')) && app) {
+        copyFolderSync(from, appDataDir)
+      } else {
+        const folders = getFoldersSync(from)
+        folders.forEach(ext => {
+          if (
+            // 首先该拓展需要存在
+            fs.existsSync(path.join(to, ext, `${dir}.json`)) &&
+            (() => {
+              try {
+                const old = JSON.parse(
+                  fs.readFileSync(path.join(to, ext, `${dir}.json`), {
+                    encoding: 'utf-8'
+                  })
+                )
+                const latest = JSON.parse(
+                  fs.readFileSync(path.join(from, ext, `${dir}.json`), {
+                    encoding: 'utf-8'
+                  })
+                )
+                if (old.version === undefined) throw new Error('1.x')
+                else {
+                  // 版本号合法性检查
+                  if (!semver.valid(old.version)) {
+                    throw new Error('invalid version')
+                  }
+                  // 比对版本号是否是新的大于旧的
+                  return semver.gt(latest.version, old.version)
                 }
-                // 比对版本号是否是新的大于旧的
-                return semver.gt(latest.version, old.version)
+              } catch {
+                return true
               }
-            } catch {
-              return true
-            }
-          })()
-        ) {
-          const exactFrom = path.join(from, ext)
-          removeDirSync(path.join(to, ext))
-          copyFolderSync(exactFrom, to)
-        }
-      })
+            })()
+          ) {
+            const exactFrom = path.join(from, ext)
+            removeDirSync(path.join(to, ext))
+            copyFolderSync(exactFrom, to)
+          }
+        })
+      }
+    } catch (error) {
+      // 安全软件 / 权限拦截时不要弹主进程错误，目录能建多少算多少
+      Logger.error(`初始化 ${dir} 目录失败: ${error}`)
+      try {
+        fs.mkdirSync(to, { recursive: true })
+      } catch {}
     }
-    return path.join(to, 'active.json')
-  })
+    ;(Global as any)[configKey] = path.join(to, 'active.json')
+  }
 }

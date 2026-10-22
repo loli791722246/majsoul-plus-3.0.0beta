@@ -7,21 +7,19 @@ import {
   MenuItem,
   screen,
   MenuItemConstructorOptions,
+  session,
   app
 } from 'electron'
 import { AddressInfo } from 'net'
 import * as path from 'path'
+import { pathToFileURL } from 'url'
 import { SaveConfigJson, UserConfigs } from '../config'
 import { Global, Logger, RemoteDomains } from '../global'
 import i18n from '../i18n'
-import {
-  CloseServer,
-  httpServer,
-  httpsServer,
-  ListenServer,
-  LoadServer
-} from '../server'
-import { getRemoteUrl } from '../utils';
+import { StartMajsoul, StopMajsoul, GetMajsoul } from '../majsoul'
+import { collectTextDiagnostics } from '../majsoul/diagnostics'
+import { findGameContents, injectTextReplacer } from '../majsoul/text-inject'
+import { ResourcePackManager } from '../resourcepack/resourcepack'
 import { ToolManager } from '../tool/tool'
 import { AudioPlayer, initPlayer, shutoffPlayer } from './audioPlayer'
 import { ManagerWindow } from './manager'
@@ -55,8 +53,8 @@ export class GameWindows {
     if (this.windowCount === 1) {
       // 关闭后台音频播放器
       shutoffPlayer()
-      // 关闭本地镜像服务器
-      CloseServer()
+      // 关闭本地中间人代理
+      StopMajsoul()
       // 依据用户设置显示被隐藏的管理器窗口
       if (UserConfigs.window.isManagerHide) {
         app.relaunch()
@@ -98,47 +96,34 @@ export function newGameWindow(id: number) {
 
   window = new BrowserWindow(config)
 
+  // 将本窗口的会话指向本地中间人代理，游戏流量（含 WebSocket）都会经过代理
+  const gameSession = window.webContents.session
+  const proxyPort = Global.ProxyPort
+  gameSession.setProxy({
+    proxyRules: `http=127.0.0.1:${proxyPort};https=127.0.0.1:${proxyPort}`
+  })
+  // 代理使用本地 CA 动态签发证书，跳过证书校验
+  gameSession.setCertificateVerifyProc((request, callback) => callback(0))
+
   // 阻止标题更改
   window.on('page-title-updated', event => event.preventDefault())
 
   window.setMenu(getGameWindowMenu(id))
 
   window.webContents.on('dom-ready', () => {
-    let url, port, http
-
-    if (UserConfigs.userData.vanillaMode) {
-      url = getRemoteUrl('/')
-    } else {
-      // 加载本地服务器地址
-      http = UserConfigs.userData.useHttpServer
-      port = (UserConfigs.userData.useHttpServer
-        ? (httpServer.address() as AddressInfo)
-        : (httpsServer.address() as AddressInfo)
-      ).port
-      url = `http${
-        UserConfigs.userData.useHttpServer ? '' : 's'
-      }://localhost:${port}/`
-    }
+    // 直接载入官方游戏地址，资源与 WebSocket 全部经由本地代理转发
+    const server = RemoteDomains[UserConfigs.userData.serverToPlay]
+    const url = `${server.domain}/`
 
     window.webContents.send(
       'load-url',
       url,
-      port,
-      http,
+      proxyPort,
+      false,
       id > 0 ? String(id) : undefined
     )
 
-    try {
-      // Discord Rich Presence
-      const client = require('discord-rich-presence')('794948848308060192')
-      client.updatePresence({
-        type: 0,
-        created_at: Date.now(),
-        instance: true,
-      })
-    } catch(e) {
-      console.error(e)
-    }
+    scheduleTextDiagnostics()
   })
 
   window.on('close', () => {
@@ -147,8 +132,10 @@ export function newGameWindow(id: number) {
   })
 
   // 监听到崩溃事件，输出 console
-  window.webContents.on('crashed', () =>
-    Logger.error(i18n.text.main.webContentsCrashed())
+  window.webContents.on('render-process-gone', (event, details) =>
+    Logger.error(
+      `${i18n.text.main.webContentsCrashed()} (${details.reason})`
+    )
   )
 
   // 当且仅当只有一个游戏窗口时修改游戏窗口
@@ -167,12 +154,15 @@ export function newGameWindow(id: number) {
     window.show()
   })
 
-
   // 设置 GameWindow 的 userAgent
-  window.webContents.userAgent = UserConfigs.window.userAgent
+  window.webContents.setUserAgent(Global.HttpGetUserAgent)
 
   // 载入本地启动器
-  window.loadURL('file://' + path.join(__dirname, '../bin/main/index.html'))
+  window
+    .loadURL(
+      pathToFileURL(path.join(__dirname, '../bin/main/index.html')).toString()
+    )
+    .catch(error => Logger.error(`加载游戏启动页失败: ${error}`))
 
   // 在 debug 启动环境下打开开发者工具
   if (process.env.NODE_ENV === 'development') {
@@ -287,12 +277,73 @@ function getGameWindowMenu(id: number) {
           label: '重载全部资源',
           accelerator: 'Shift+Alt+R',
           click: (item: MenuItem, window: BrowserWindow) => {
-            CloseServer()
+            StopMajsoul()
             ipcMain.emit('refresh-resourcepack', {})
             ipcMain.emit('refresh-extension', {})
-            LoadServer()
-            ListenServer(Global.ServerPort)
-            GameWindows.forEach(window => window.reload())
+            StartMajsoul(Global.ProxyPort)
+              .then(port => {
+                Global.ProxyPort = port
+                GameWindows.forEach(window => window.reload())
+              })
+              .catch(error => Logger.error(`重启代理失败: ${error}`))
+          }
+        },
+        {
+          label: '清除缓存并重载',
+          click: (item: MenuItem, window: BrowserWindow) => {
+            const gameSession = window.webContents.session
+            gameSession
+              .clearCache()
+              .then(() =>
+                gameSession.clearStorageData({
+                  storages: [
+                    'cachestorage',
+                    'indexdb',
+                    'shadercache',
+                    'serviceworkers'
+                  ]
+                })
+              )
+              .then(() => GameWindows.forEach(w => w.reload()))
+              .catch(error => Logger.error(`清除缓存失败: ${error}`))
+          }
+        },
+        {
+          label: '导出资源请求日志',
+          accelerator: 'CmdOrCtrl+Shift+L',
+          click: () => {
+            const service = GetMajsoul()
+            if (!service) return
+            try {
+              const file = service.dumpRequests()
+              dialog.showMessageBox({
+                type: 'info',
+                title: '资源请求日志',
+                message:
+                  `已导出到：\n${file}\n\n` +
+                  `程序也会自动记录到：\n${service.requestLogFile}\n\n` +
+                  '把该文件发给开发者即可定位资源路径。'
+              })
+            } catch (error) {
+              Logger.error(`导出日志失败: ${error}`)
+            }
+          }
+        },
+        {
+          label: '文本替换诊断',
+          accelerator: 'CmdOrCtrl+Shift+D',
+          click: () => {
+            collectTextDiagnostics()
+              .then(file =>
+                dialog.showMessageBox({
+                  type: 'info',
+                  title: '文本替换诊断',
+                  message:
+                    `已写入：\n${file}\n\n` +
+                    '请把该文件发给开发者；如果 matches 为 0，说明 from 和实际文本不一致。'
+                })
+              )
+              .catch(error => Logger.error(`文本诊断失败: ${error}`))
           }
         },
         {
@@ -329,9 +380,17 @@ function getGameWindowMenu(id: number) {
   return Menu.buildFromTemplate(template)
 }
 
+// 启动后从主进程注入文本替换脚本（诊断改为手动 Ctrl+Shift+D 触发）
+function scheduleTextDiagnostics() {
+  const timer = setInterval(() => {
+    const target = findGameContents()
+    if (target) injectTextReplacer(target)
+  }, 5000)
+  setTimeout(() => clearInterval(timer), 300000)
+}
+
 // 获取窗口标题，有 0.5% 概率显示为喵喵喵
-function getGameWindowTitle(id: number): string {
-  // 彩蛋标题
+function getGameWindowTitle(id: number): string {  // 彩蛋标题
   const titles = [
     {
       text: i18n.text.main.programName(),

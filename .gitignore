@@ -71,10 +71,20 @@ assets/manager/**/*.css
 .vscode/
 
 # portable data
-data/
+/data/
+!assets/data/
+
+# test output
+test-output/
+
+# patcher build output
+/runtime/patcher-bin/
 
 # exported files
 *.mspr
 *.mspe
 *.mspm
 *.mspt
+# local CA / secrets
+assets/certificate/
+data/certificates/

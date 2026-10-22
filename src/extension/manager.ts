@@ -1,14 +1,12 @@
 import * as fs from 'fs'
-import * as Koa from 'koa'
-import * as Router from 'koa-router'
+import { ipcMain } from 'electron'
 import * as path from 'path'
-import { format } from 'prettier'
 import BaseManager from '../BaseManager'
 import { UserConfigs } from '../config'
-import { appDataDir, GlobalPath, Logger, RemoteDomains } from '../global'
+import { appDataDir, GlobalPath, Logger } from '../global'
 import { MajsoulPlus } from '../majsoul_plus'
 import { ResourcePackManager } from '../resourcepack/resourcepack'
-import { fetchAnySite, getRemoteOrCachedFile } from '../utils'
+import { fetchAnySite } from '../utils'
 import * as schema from './schema.json'
 
 const defaultExtension: MajsoulPlus.Extension = {
@@ -30,9 +28,7 @@ Object.freeze(defaultExtension)
 
 export default class MajsoulPlusExtensionManager extends BaseManager {
   private extensionScripts: Map<string, string[]> = new Map()
-  private codejs = ''
-
-  private useScriptPromises = []
+  private useScriptPromises: Array<Promise<any>> = []
 
   constructor(configPath: string) {
     super('extension', configPath, defaultExtension, schema)
@@ -53,7 +49,6 @@ export default class MajsoulPlusExtensionManager extends BaseManager {
     super.clear()
     ResourcePackManager.clearExtensionPack()
     this.extensionScripts = new Map()
-    this.codejs = ''
     this.useScriptPromises = []
   }
 
@@ -68,270 +63,124 @@ export default class MajsoulPlusExtensionManager extends BaseManager {
       extension.entry = [extension.entry]
     }
 
-    const err = false
-
     const useScript = async (entry: string) => {
-      if (err) return
-
       // 加载远程脚本 远程脚本不缓存
       if (entry.match(/^https?:\/\//)) {
         const script = await fetchAnySite(entry, 'utf-8')
         this.addScript(extension.id, script)
-      } else {
-        // 本地脚本
-        const p = path.resolve(
-          appDataDir,
-          GlobalPath.ExtensionDir,
-          folder,
-          entry
-        )
-        if (!fs.existsSync(p)) {
-          Logger.error(`extension entry ${entry} not found!`)
-          return
-        }
+        return
+      }
 
-        try {
-          const script = fs.readFileSync(p, { encoding: 'utf-8' })
-          this.addScript(extension.id, script)
-        } catch (e) {
-          Logger.error(
-            `failed to load extension ${extension.name} from ${p}: ${e}`
-          )
-          this.addScript(
-            extension.id,
-            `// failed to load extension ${extension.name} from ${p}: ${e}`
-          )
-        }
+      // 本地脚本
+      const p = path.resolve(
+        appDataDir,
+        GlobalPath.ExtensionDir,
+        folder,
+        entry
+      )
+      if (!fs.existsSync(p)) {
+        Logger.error(`extension entry ${entry} not found!`)
+        return
+      }
+
+      try {
+        const script = fs.readFileSync(p, { encoding: 'utf-8' })
+        this.addScript(extension.id, script)
+      } catch (e) {
+        Logger.error(
+          `failed to load extension ${extension.name} from ${p}: ${e}`
+        )
+        this.addScript(
+          extension.id,
+          `// failed to load extension ${extension.name} from ${p}: ${e}`
+        )
       }
     }
 
     return Promise.all(extension.entry.map(useScript))
   }
 
-  register(server: Koa, router: Router) {
-    // 加载扩展脚本
+  /**
+   * 载入所有启用的扩展脚本。旧版本通过本地 Koa 服务器下发脚本，
+   * 现在改为直接注入到游戏页面中（MITM 代理会修改 HTML）。
+   */
+  async prepare() {
+    this.extensionScripts = new Map()
+    this.useScriptPromises = []
+
     for (const key in this.loadedDetails) {
-      if (this.loadedDetails[key]) {
-        const pack = this.loadedDetails[key]
-        if (
-          pack.enabled &&
-          (pack.metadata as MajsoulPlus.Extension).applyServer.includes(
-            UserConfigs.userData.serverToPlay
-          )
-        ) {
-          this.useScriptPromises.push(
-            this.useScript(pack.metadata.id, pack.metadata)
-          )
-        }
-      }
+      const pack = this.loadedDetails[key]
+      if (!pack || !pack.enabled) continue
+      const extension = pack.metadata as MajsoulPlus.Extension
+      const servers = extension.applyServer || [0, 1, 2]
+      if (!servers.includes(UserConfigs.userData.serverToPlay)) continue
+      this.useScriptPromises.push(
+        this.useScript(extension.id, extension)
+      )
     }
 
-    const processRegion = (data) => UserConfigs.userData.serverToPlay === 0
-      ? Buffer.from(
-          data
-            .toString('utf-8')
-            .replace(/\.\.\/region\/region\.txt/g, 'region.txt')
-        )
-      : data;
-
-    router.get('/:version/code.js', async (ctx, next) => {
-      if (UserConfigs.userData.vanillaMode) {
-        const code = (
-          await getRemoteOrCachedFile(ctx.request.originalUrl, false, data =>
-            processRegion(data)
-          )
-        ).data.toString('utf-8')
-        ctx.res.setHeader('Content-Type', 'application/javascript')
-        ctx.body = code;
-        return;
-      }
-
-      if (this.codejs !== '') {
-        ctx.res.statusCode = 200
-        ctx.body = this.codejs
-      }
-
-      const loader = {
-        codeVersion: ctx.params.version,
-        hasLauncher: false,
-        pre: [],
-        post: [],
-        launcher: ''
-      }
-
-      Array.from(this.extensionScripts.keys())
-        .filter(key => this.loadedDetails[key].sequence > 0)
-        .sort(
-          (a, b) =>
-            this.loadedDetails[a].sequence - this.loadedDetails[b].sequence
-        )
-        .forEach(id => {
-          // 当未加载时跳出
-          if (!this.loadedDetails[id].enabled) return
-
-          const extension: MajsoulPlus.Extension = this.loadedDetails[id]
-            .metadata
-          if (
-            extension.applyServer.includes(UserConfigs.userData.serverToPlay)
-          ) {
-            if (!loader.hasLauncher && id.endsWith('_launcher')) {
-              loader.hasLauncher = true
-              loader.launcher = id
-              return
-            } else if (loader.hasLauncher && id.endsWith('_launcher')) {
-              Logger.error(`Multiple launchers, skipping ${id}`)
-              return
-            }
-            if (extension.loadBeforeGame) {
-              loader.pre.push(id)
-            } else {
-              loader.post.push(id)
-            }
-          }
-        })
-
-      this.codejs = `const Majsoul_Plus = {};
-Majsoul_Plus.$ = ${JSON.stringify(loader, null, 2)};
-[...Majsoul_Plus.$.pre, ...Majsoul_Plus.$.post, ...(Majsoul_Plus.$.hasLauncher ? [Majsoul_Plus.$.launcher] : [])].forEach(ext => Majsoul_Plus[ext] = {});
-
-(async () => {
-  const $ = Majsoul_Plus.$;
-  await Promise.all(
-    ['console', 'fetch'].map(name => addScript(\`majsoul_plus/plugin/\${name}.js\`))
-  );
-
-  await addScript(\`majsoul_plus/\${$.codeVersion}/code.js\`);
-
-  await Promise.all(
-    $.pre.map(ext => addScript(\`majsoul_plus/extension/scripts/\${ext}/\`))
-  );
-
-  if ($.hasLauncher) {
-    await addScript(\`majsoul_plus/extension/scripts/\${$.launcher}/\`)
-  } else {
-    new GameMgr();
+    await Promise.all(this.useScriptPromises)
   }
 
-  await Promise.all(
-    $.post.map(ext => addScript(\`majsoul_plus/extension/scripts/\${ext}/\`))
-  );
-})()
+  /**
+   * 返回需要注入到游戏页面的脚本（head 前置 / body 后置）。
+   */
+  getInjection(): { pre: string; post: string } {
+    const pre: string[] = []
+    const post: string[] = []
 
-function addScript(url) {
-  return new Promise((resolve, reject) => {
-    const tag = document.createElement('script');
-    tag.src = url;
-    tag.async = false;
-    tag.onload = resolve;
-    tag.onerror = reject;
-    document.head.appendChild(tag);
-  });
-}
-`
-      ctx.res.statusCode = 200
-      ctx.res.setHeader('Content-Type', 'application/javascript')
-      ctx.body = format(this.codejs, { parser: 'babel' })
-    })
-
-    // 获取扩展基本信息
-    router.get(`/majsoul_plus/extension/:id`, async (ctx, next) => {
-      ctx.response.status = this.loadedMap.has(ctx.params.id) ? 200 : 404
-      ctx.body = this.loadedMap.has(ctx.params.id)
-        ? JSON.stringify(this.loadedMap.get(ctx.params.id), null, 2)
-        : 'Not Found'
-    })
-
-    router.get(`/majsoul_plus/extension/scripts/:id/`, async (ctx, next) => {
-      if (!this.loadedMap.has(ctx.params.id)) {
-        ctx.res.statusCode = 404
-        return
+    for (const [id, scripts] of this.extensionScripts) {
+      const detail = this.loadedDetails[id]
+      if (!detail || !detail.enabled) continue
+      const extension = detail.metadata as MajsoulPlus.Extension
+      if (
+        !(extension.applyServer || [0, 1, 2]).includes(
+          UserConfigs.userData.serverToPlay
+        )
+      ) {
+        continue
       }
+      const code = this.wrap(id, extension, scripts)
+      if (extension.loadBeforeGame) pre.push(code)
+      else post.push(code)
+    }
 
-      // 等待所有脚本加载完成
-      await Promise.all(this.useScriptPromises)
+    return { pre: pre.join('\n'), post: post.join('\n') }
+  }
 
-      const extension = this.loadedMap.get(ctx.params.id)
-      const scripts = this.extensionScripts.get(ctx.params.id)
-
-      ctx.res.statusCode = 200
-      ctx.res.setHeader('Content-Type', 'application/javascript')
-      ctx.body = format(
-        `/**
-* Extension： ${extension.id}
-* Author: ${extension.author}
-* Version: ${extension.version}
-*/
-((context, console, fetchSelf) => {
-     ${scripts
-       .map(
-         script => `  try {
-     ${script}
-  } catch(e) {
-    console.error('Unresolved Error', e);
+  private wrap(
+    id: string,
+    extension: MajsoulPlus.Extension,
+    scripts: string[]
+  ): string {
+    const body = scripts
+      .map(
+        script => `  try {
+${script}
+  } catch (e) {
+    context.console.error('Unresolved Error', e);
   }`
-       )
-       .join('\n')}
-})(
-  Majsoul_Plus.${extension.id},
-  extensionConsole('${extension.id}'),
-  extensionFetch('${extension.id}')
-);`,
-        { parser: 'babel' }
       )
-    })
+      .join('\n')
 
-    router.get(`/majsoul_plus/:version/code.js`, async (ctx, next) => {
-      const url = ctx.request.originalUrl.replace(/^\/majsoul_plus/, '')
-      const code = (
-        await getRemoteOrCachedFile(url, false, data =>
-          processRegion(data)
-        )
-      ).data.toString('utf-8')
-      ctx.res.setHeader('Content-Type', 'application/javascript')
-      ctx.body = code.replace('new GameMgr', '()=>1')
-    })
-
-    router.get('/majsoul_plus/plugin/console.js', async (ctx, next) => {
-      const result = format(
-        `
-        const extensionConsole = id => {
-          return new Proxy(
-            {},
-            {
-              get: (target, name) => {
-                return typeof console[name] !== 'function'
-                  ? () => undefined
-                  : (...args) => {
-                      if (args.length === 0) return undefined
-                      else if (typeof args[0] === 'string')
-                        args[0] = \`[\${id}] \${args[0]}\`
-                      else args = [\`[\${id}]\`, ...args]
-                      return console[name].apply(this, args)
-                    }
-              }
-            }
-          )
-        }
-      `,
-        { parser: 'babel' }
-      )
-      ctx.res.statusCode = 200
-      ctx.res.setHeader('Content-Type', 'application/javascript')
-      ctx.body = result
-    })
-
-    router.get('/majsoul_plus/plugin/fetch.js', async (ctx, next) => {
-      ctx.res.statusCode = 200
-      ctx.res.setHeader('Content-Type', 'application/javascript')
-      ctx.body = `window.extensionFetch = id => {
-  return (input, init) => {
-    if (typeof input !== 'string') {
-      return
+    return `/* Extension: ${id} (${extension.version || ''}) */
+;(function () {
+  const context = (window.Majsoul_Plus = window.Majsoul_Plus || {});
+  const prefix = '[${id}]';
+  const extensionConsole = new Proxy({}, {
+    get: (target, name) => {
+      if (typeof console[name] !== 'function') return () => undefined;
+      return (...args) => {
+        if (args.length === 0) return;
+        if (typeof args[0] === 'string') args[0] = prefix + ' ' + args[0];
+        else args = [prefix, ...args];
+        return console[name].apply(console, args);
+      };
     }
-    return fetch(\`majsoul_plus/extension/\${id}/\${input}\`, init)
-  }
-}`
-    })
+  });
+  const fetchSelf = () => Promise.reject(new Error('extensionFetch is no longer available'));
+${body}
+})();`
   }
 
   changeEnable(event, id: string, enabled: boolean) {

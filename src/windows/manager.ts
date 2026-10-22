@@ -1,11 +1,13 @@
 import {
   BrowserWindow,
   BrowserWindowConstructorOptions,
-  ipcMain
+  ipcMain,
+  session
 } from 'electron'
 import * as path from 'path'
+import { pathToFileURL } from 'url'
 import { SaveConfigJson, UserConfigs } from '../config'
-import { Global } from '../global'
+import { Global, Logger } from '../global'
 import { MajsoulPlus } from '../majsoul_plus'
 import { removeDirSync, updateObject } from '../utils'
 
@@ -24,7 +26,7 @@ export function initManagerWindow() {
   if (process.platform === 'darwin') {
     config.frame = false
     config.titleBarStyle = 'hidden'
-    config.vibrancy = 'medium-light'
+    config.vibrancy = 'medium-light' as any
     config.backgroundColor = 'rgba(0,0,0,0)'
   }
 
@@ -60,8 +62,10 @@ export function initManagerWindow() {
 
   // 载入本地页面，对于 Linux 系统 file：// 不能省略
   ManagerWindow.loadURL(
-    'file://' + path.join(__dirname, '../manager/index.html')
-  )
+    pathToFileURL(path.join(__dirname, '../manager/index.html')).toString()
+  ).catch(error => {
+    Logger.error(`加载管理器页面失败: ${error}`)
+  })
 
   // 在 debug 环境下启动会打开开发者工具
   if (process.env.NODE_ENV === 'development') {
@@ -70,6 +74,17 @@ export function initManagerWindow() {
 
   ipcMain.on('clear-cache', event => {
     removeDirSync(Global.LocalCachePath)
+    // Unity WebGL 的资源缓存保存在 Cache Storage / IndexedDB 中，
+    // 只删本地目录无法让替换后的立绘、语音立刻生效。
+    const gameSession = session.defaultSession
+    gameSession
+      .clearCache()
+      .then(() =>
+        gameSession.clearStorageData({
+          storages: ['cachestorage', 'indexdb', 'shadercache', 'serviceworkers']
+        })
+      )
+      .catch(error => Logger.error(`清理游戏缓存失败: ${error}`))
     event.returnValue = 0
   })
 
@@ -89,5 +104,6 @@ export function initManagerWindow() {
       Global.ManagerWindowConfig.height * UserConfigs.window.zoomFactor
     )
     ManagerWindow.webContents.zoomFactor = UserConfigs.window.zoomFactor
+    event.returnValue = true
   })
 }

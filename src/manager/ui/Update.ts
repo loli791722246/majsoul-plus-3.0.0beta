@@ -1,5 +1,5 @@
 import Network from '../utils/Network'
-import { remote, shell } from 'electron'
+import { ipcRenderer, shell } from 'electron'
 import { gt } from 'semver'
 
 class Update {
@@ -16,7 +16,7 @@ class Update {
   }
 
   private getLocalVersion() {
-    return `v${remote.app.getVersion()}`
+    return `v${ipcRenderer.sendSync('get-app-version')}`
   }
 
   private async getRemoteVersionInfo() {
@@ -67,7 +67,7 @@ class Update {
     const localVersion = await this.getLocalVersion()
     const remoteVersionInfo = await this.getRemoteVersionInfo()
     const { remoteVersion, time, url } = remoteVersionInfo
-    if (gt(remoteVersion, localVersion)) {
+    if (remoteVersion && gt(remoteVersion, localVersion)) {
       this._renderUpdateHint({ remoteVersion, localVersion, time, url })
     }
     // TODO: 在线更新

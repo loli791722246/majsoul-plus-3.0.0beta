@@ -1,5 +1,6 @@
-import { BrowserWindow } from 'electron'
+﻿import { BrowserWindow } from 'electron'
 import * as path from 'path'
+import { pathToFileURL } from 'url'
 
 export let AudioPlayer: BrowserWindow
 
@@ -11,7 +12,7 @@ export function initPlayer() {
     show: false
   })
   AudioPlayer.loadURL(
-    'file://' + path.join(__dirname, '../bin/audio/player.html')
+    pathToFileURL(path.join(__dirname, '../bin/audio/player.html')).toString()
   )
 }
 /**

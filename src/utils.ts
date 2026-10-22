@@ -1,6 +1,5 @@
 import * as AdmZip from 'adm-zip'
 import * as childProcess from 'child_process'
-import fetch from 'electron-fetch'
 import * as fs from 'fs'
 import * as path from 'path'
 import { UserConfigs } from './config'
@@ -118,14 +117,15 @@ export async function getRemoteSource(
   const remoteUrl = getRemoteUrl(url)
   const resp = await fetch(remoteUrl, {
     headers: {
-      'User-Agent': UserConfigs.window.userAgent
-    }
+      'User-Agent': Global.HttpGetUserAgent
+    },
+    redirect: 'manual'
   })
 
   const statusCode = resp.status
-  const fileData = await resp.buffer()
+  const fileData = Buffer.from(await resp.arrayBuffer())
   if (statusCode === 302 || statusCode === 301) {
-    return getRemoteSource(resp.headers['location'], encrypt)
+    return getRemoteSource(resp.headers.get('location'), encrypt)
   } else {
     if (statusCode < 200 || statusCode >= 400) {
       Logger.warning(
@@ -258,13 +258,15 @@ export async function getRemoteOrCachedFile(
 }
 
 // 主进程获取资源
-export async function fetchAnySite(url: string, encoding: BufferEncoding = 'binary') {
+export async function fetchAnySite(url: string, encoding = 'binary') {
   const resp = await fetch(url, {
     headers: {
-      'User-Agent': UserConfigs.window.userAgent
+      'User-Agent': Global.HttpGetUserAgent
     }
   })
-  return (await resp.buffer()).toString(encoding)
+  return Buffer.from(await resp.arrayBuffer()).toString(
+    encoding as BufferEncoding
+  )
 }
 
 // 写入本地文件
@@ -274,8 +276,8 @@ export async function writeFile(
   encoding: BufferEncoding = 'binary'
 ): Promise<void> {
   await mkdirs(path.dirname(to))
-  return new Promise((resolve, reject) => {
-    fs.writeFile(to, data, {encoding: encoding}, err => {
+  return new Promise<void>((resolve, reject) => {
+    fs.writeFile(to, data, encoding, err => {
       if (err) {
         reject(err)
       }

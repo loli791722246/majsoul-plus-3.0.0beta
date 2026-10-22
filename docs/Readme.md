@@ -1,60 +1,76 @@
 # 雀魂 Plus 设计文档
 
-这里是雀魂 Plus 的设计文档，通过阅读这里的内容，你可以简要地了解雀魂 Plus 的设计思路，运行流程，以及决定是否加入雀魂 Plus 的维护之中。
+这里简要说明 3.0 的启动流程和模块边界。协议细节见 [MITM.md](MITM.md)，
+资源包格式见 [RESOURCE_PACK.md](RESOURCE_PACK.md)。
 
-## 加载流程
+## 启动流程
 
-下面简单通过顺序的形式介绍雀魂 Plus 的加载流程
+0. **初始化**
 
-0. 执行之前  
-   在这一步初始化了很多顺序无关的内容，比如：
+   - `appDataDir`：便携模式为程序旁 `data/`，开发模式为项目根 `data/`；
+   - `UserConfigs`：读取 `data/user-config.json`，缺失字段用默认值补齐；
+   - `i18n`：初始化界面语言；
+   - Manager 实例：资源包 / 扩展 / 工具管理器；
+   - 默认配置 `Object.freeze`。
 
-   - appDataDir：用户保存所有内容的路径
-   - UserConfigs：加载用户设置
-   - i18n：初始化 i18n 实例
-   - httpsServer：创建默认的服务器
-   - manager：资源包、扩展的 Manager 实例构造
-   - default：各项默认配置的初始化，以及对需要的变量进行 `Object.freeze`
+1. **加载全局目录**
 
-1. 加载全局变量  
-   此处加载的全局变量包括“资源包路径”，“扩展路径”和“工具路径”。在加载全局变量的过程中，如果对应的目录不存在，则会将雀魂 Plus 自带的资源包、扩展和工具复制到对应的目录下。
-1. 加载资源包  
-   此处会对对应目录下启用的资源包进行加载。注：此步骤应该移动到启动游戏时进行。
-1. 加载扩展
-   此处会对对应目录下启用的扩展进行加载。注：此步骤应该移动到启动游戏时进行。
-1. 设置代理  
-   当用户配置的代理存在时，启用代理。
-1. 针对操作系统禁用/启用进程内 GPU 处理  
-   当用户设置中启用 `isInProcessGpuOn` 后，对 `Windows` 和 `macOS` 进行 `in-process-gpu` 参数附加。
-1. 忽略 GPU 黑名单  
-   当用户设置中启用 `isIgnoreGpuBlacklist` 后，进行 `ignore-gpu-blacklist` 参数附加，忽略 GPU 黑名单。
-1. 禁用硬件加速  
-   当用户设置中启用 `isHardwareAccelerationDisable` 后，禁用硬件加速。
-1. `process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'`
-1. // 忽略证书错误
-1. 允许自动播放音视频  
-   允许在后台不经用户手动授权播放截图的背景音。
-1. 当全部窗口退出后，结束进程
-1. 阻止证书验证
-1. 在 `ready` 后执行的操作
-1. 监听各项崩溃事件
+   - `data/resourcepack/`、`data/extension/`、`data/tool/`；
+   - 目录不存在时从 `dist/bin/` 复制内置内容；
+   - 复制失败只记录日志，不阻塞启动（避免安全软件 `EPERM` 弹窗）。
 
-### `ready` 后执行的操作
+2. **加载资源包 / 扩展 / 工具**
 
-1. 收到 Manager 发送的 `start-game` 后执行的操作
-1. 注册老板键功能
-1. 注册截图功能
-1. 注册工具窗口的沙盒功能
-1. 初始化扩展资源管理器窗口
+   读取各目录下的 `active.json`，构造启用列表。加载失败会被捕获并记录，
+   主进程继续启动。
 
-### `start-game` 后执行的操作
+3. **启动游戏**
 
-1. 加载服务器路由规则
-1. 初始化本地镜像服务器  
-   这一步中会根据用户配置决定启动 http 服务器还是 https 服务器。
-1. 初始化游戏窗口
-1. 根据设置决定销毁 / 隐藏 Manager 窗口
+   - 收到 Manager 的 `start-game`；
+   - 创建游戏窗口，加载官方页面；
+   - 启动本地 MITM 代理，游戏窗口的 session 走该代理；
+   - 注册快捷键、截图、老板键等。
+
+4. **MITM 代理**
+
+   - `src/mitm/certificate.ts`：本地 CA，按 SNI 动态签发证书；
+   - `src/mitm/proxy.ts`：HTTP CONNECT、TLS 解密、HTTP 转发、HTML 注入；
+   - `src/mitm/websocket.ts`：WebSocket 帧转发，挂载 mod / 资源替换钩子。
+
+5. **Mod**
+
+   - `src/mod/liqi.ts`：从 `liqi.desc` 载入 protobuf 描述；
+   - `src/mod/engine.ts`：参考 MajsoulMax `plugin/mod.py` 的规则，
+     修改 `Req` / `Res` / `Notify`；
+   - `src/mod/settings.ts`：读写 `data/config/settings.mod.yaml`；
+   - `src/mod/data.ts`：读取 `max_data.yaml`。
+
+6. **资源替换**
+
+   - `src/majsoul/index.ts` 在请求阶段按 URL 后缀匹配资源包 / 扩展规则；
+   - 命中 AssetBundle 时调用 `BundlePatcher`，用 `runtime/patcher/patcher.py`
+     生成补丁并缓存；
+   - 字体补全、立绘偏移都在补丁器内完成；
+   - 文本替换由注入脚本扫描 Unity 堆内存完成。
+
+7. **窗口与生命周期**
+
+   - 游戏窗口关闭后按配置隐藏 / 销毁 Manager；
+   - 全部窗口退出后结束进程；
+   - Nahimic 环境由启动脚本处理，不属于应用逻辑。
+
+## 数据流
+
+```text
+游戏窗口
+  │  HTTPS / WSS
+  ▼
+本地 MITM 代理
+  ├─ HTTP：按路径返回资源包 / 扩展文件
+  ├─ WebSocket：protobuf 解码 → ModEngine → 重新编码
+  └─ AssetBundle：BundlePatcher → 本地缓存 → 返回补丁后的 bundle
+```
 
 ## IPC
 
-见 [IPC.md](IPC.md)
+见 [IPC.md](IPC.md)。

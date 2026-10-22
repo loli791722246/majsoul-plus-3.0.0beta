@@ -34,6 +34,41 @@
         }
       }
     },
+    "probe": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "font": {
+      "type": "object",
+      "properties": {
+        "source": { "type": "string" },
+        "scale": { "type": "number" },
+        "offsetX": { "type": "number" },
+        "offsetY": { "type": "number" }
+      }
+    },
+    "text": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "from": { "type": "string" },
+          "to": { "type": "string" }
+        },
+        "required": ["from", "to"]
+      }
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "target": { "type": "string" },
+          "file": { "type": "string" }
+        },
+        "required": ["target", "file"]
+      }
+    },
     "replace": {
       "type": "array",
       "items": {

@@ -13,8 +13,7 @@ const defaultWindowConfig: MajsoulPlus.UserWindowConfig = {
   renderingMultiple: 100,
   isKioskModeOn: false,
   isNoBorder: false,
-  isManagerHide: false,
-  userAgent: Global.HttpGetUserAgent
+  isManagerHide: false
 }
 
 const defaultUpdateConfig: MajsoulPlus.UserUpdateConfig = {
@@ -30,15 +29,29 @@ const defaultChromiumConfig: MajsoulPlus.UserChromiumConfig = {
 
 const defaultUserDataConfig: MajsoulPlus.UserDataConfig = {
   useHttpServer: false,
-  serverToPlay: 0,
-  vanillaMode: false
+  serverToPlay: 0
+}
+
+const defaultFontConfig: MajsoulPlus.UserFontConfig = {
+  source: 'youyuan',
+  scale: 1,
+  offsetX: 0,
+  offsetY: 0
+}
+
+const defaultPortraitConfig: MajsoulPlus.UserPortraitConfig = {
+  offsetX: 0,
+  offsetY: 0,
+  scale: 1
 }
 
 const defaultConfig: MajsoulPlus.UserConfig = {
   chromium: defaultChromiumConfig,
   update: defaultUpdateConfig,
   userData: defaultUserDataConfig,
-  window: defaultWindowConfig
+  window: defaultWindowConfig,
+  font: defaultFontConfig,
+  portrait: defaultPortraitConfig
 }
 
 /**
@@ -48,6 +61,8 @@ Object.freeze(defaultWindowConfig)
 Object.freeze(defaultUpdateConfig)
 Object.freeze(defaultChromiumConfig)
 Object.freeze(defaultUserDataConfig)
+Object.freeze(defaultFontConfig)
+Object.freeze(defaultPortraitConfig)
 Object.freeze(defaultConfig)
 
 /**
@@ -71,9 +86,27 @@ export function LoadConfigJson(): MajsoulPlus.UserConfig {
 }
 
 export function SaveConfigJson(config: MajsoulPlus.UserConfig) {
-  fs.writeFileSync(Global.UserConfigPath, JSON.stringify(config, null, 2), {
-    encoding: 'utf-8'
-  })
+  const text = JSON.stringify(config, null, 2)
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      fs.writeFileSync(Global.UserConfigPath, text, { encoding: 'utf-8' })
+      return
+    } catch (error) {
+      if (attempt === 5) {
+        // 杀毒 / 权限拦截时不影响程序运行，只是本次设置不落盘
+        try {
+          // eslint-disable-next-line no-console
+          console.warn('[Majsoul Plus] 保存配置失败:', error)
+        } catch {}
+        return
+      }
+      // 杀软可能短暂锁定文件，稍等后重试
+      const until = Date.now() + 200
+      while (Date.now() < until) {
+        // busy wait，启动阶段最多 1 秒
+      }
+    }
+  }
 }
 
 export const UserConfigs: MajsoulPlus.UserConfig = LoadConfigJson()
